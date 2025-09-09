@@ -1,0 +1,608 @@
+<!DOCTYPE html> <html lang="en"> <head> <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"> <meta charset="utf-8"> <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> <meta http-equiv="X-UA-Compatible" content="IE=edge"> <title> Writing a Hypervisor from Scratch - Software | Stephen Chien </title> <meta name="author" content="Stephen Chien"> <meta name="description" content="Taking a close look at FreeBSD's BHyVe."> <meta name="keywords" content="jekyll, jekyll-theme, academic-website, portfolio-website"> <link rel="stylesheet" href="/assets/css/bootstrap.min.css?a4b3f509e79c54a512b890d73235ef04"> <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mdbootstrap@4.20.0/css/mdb.min.css" integrity="sha256-jpjYvU3G3N6nrrBwXJoVEYI/0zw8htfFnhT9ljN3JJw=" crossorigin="anonymous"> <link defer rel="stylesheet" href="/assets/css/academicons.min.css?f0b7046b84e425c55f3463ac249818f5"> <link defer rel="stylesheet" href="/assets/css/scholar-icons.css?62b2ac103a88034e6882a5be5f3e2772"> <link defer rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700|Roboto+Slab:100,300,400,500,700|Material+Icons&amp;display=swap"> <link defer rel="stylesheet" href="/assets/css/jekyll-pygments-themes-github.css?591dab5a4e56573bf4ef7fd332894c99" media="" id="highlight_theme_light"> <link defer href="/assets/css/bootstrap-toc.min.css?6f5af0bb9aab25d79b2448143cbeaa88" rel="stylesheet"> <link rel="shortcut icon" href="data:image/svg+xml,&lt;svg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20100%20100%22&gt;&lt;text%20y=%22.9em%22%20font-size=%2290%22&gt;%F0%9F%8C%B1&lt;/text&gt;&lt;/svg&gt;"> <link rel="stylesheet" href="/assets/css/main.css?d41d8cd98f00b204e9800998ecf8427e"> <link rel="canonical" href="https://stephentea.github.io/blog/2025/vtx-bhyve/"> <script src="/assets/js/theme.js?a81d82887dd692e91686b43de4542f18"></script> <link defer rel="stylesheet" href="/assets/css/jekyll-pygments-themes-native.css?5847e5ed4a4568527aa6cfab446049ca" media="none" id="highlight_theme_dark"> <script>
+    initTheme();
+  </script> </head> <body class="fixed-top-nav "> <header> <nav id="navbar" class="navbar navbar-light navbar-expand-sm fixed-top" role="navigation"> <div class="container"> <a class="navbar-brand title font-weight-lighter" href="/"> <span class="font-weight-bold">Stephen</span> Chien </a> <button class="navbar-toggler collapsed ml-auto" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation"> <span class="sr-only">Toggle navigation</span> <span class="icon-bar top-bar"></span> <span class="icon-bar middle-bar"></span> <span class="icon-bar bottom-bar"></span> </button> <div class="collapse navbar-collapse text-right" id="navbarNav"> <ul class="navbar-nav ml-auto flex-nowrap"> <li class="nav-item "> <a class="nav-link" href="/">about </a> </li> <li class="nav-item active"> <a class="nav-link" href="/blog/">blog </a> </li> <li class="nav-item "> <a class="nav-link" href="/courses/">courses </a> </li> <li class="nav-item "> <a class="nav-link" href="/projects/">projects </a> </li> <li class="nav-item "> <a class="nav-link" href="/teaching/">teaching </a> </li> <li class="nav-item "> <a class="nav-link" href="/paper_summaries/">paper summaries </a> </li> <li class="nav-item"> <button id="search-toggle" title="Search" onclick="openSearchModal()"> <span class="nav-link">ctrl k <i class="ti ti-search"></i></span> </button> </li> <li class="toggle-container"> <button id="light-toggle" title="Change theme"> <i class="ti ti-sun-moon" id="light-toggle-system"></i> <i class="ti ti-moon-filled" id="light-toggle-dark"></i> <i class="ti ti-sun-filled" id="light-toggle-light"></i> </button> </li> </ul> </div> </div> </nav> <progress id="progress" value="0"> <div class="progress-container"> <span class="progress-bar"></span> </div> </progress> </header> <div class="container mt-5" role="main"> <div class="row"> <div class="col-sm-3"> <nav id="toc-sidebar" class="sticky-top"></nav> </div> <div class="col-sm-9"> <div class="post"> <header class="post-header"> <h1 class="post-title">Writing a Hypervisor from Scratch - Software</h1> <p class="post-meta"> Created on August 15, 2025 </p> <p class="post-tags"> <a href="/blog/2025"> <i class="fa-solid fa-calendar fa-sm"></i> 2025 </a>   ·   <a href="/blog/tag/virtualization"> <i class="fa-solid fa-hashtag fa-sm"></i> virtualization</a>   <a href="/blog/tag/operating-systems"> <i class="fa-solid fa-hashtag fa-sm"></i> operating-systems</a>   ·   <a href="/blog/category/systems"> <i class="fa-solid fa-tag fa-sm"></i> systems</a> </p> </header> <article class="post-content"> <div id="markdown-content"> <p>This is the second post in my series exploring how to write a hypervisor from scratch. In the <a href="/blog/2025/vtx-hardware">first post of the series</a>, we motivated virtualization and took a look at the modern hardware virtualization support (specifically Intel VT-x). In this post, I will explore the design details and walk through the code of <a href="https://bhyve.org/" rel="external nofollow noopener" target="_blank">BHyVe</a>, which is a hypervisor for FreeBSD.</p> <p>Again, this post will largely follow <a href="https://syuu1228.github.io/howto_implement_hypervisor/" rel="external nofollow noopener" target="_blank">ハイパーバイザの作り方</a>, a Japanese blog series on hypervisor development, but I will supplement these notes with my own experience working on <a href="https://github.com/matsu/bitvisor" rel="external nofollow noopener" target="_blank">BitVisor</a>, a lightweight, para-passthrough hypervisor supporting MacOS, Windows, and Linux, running on top of both Intel and AMD CPUs.</p> <h1 id="what-is-bhyve">What is BHyVe?</h1> <p>BHyVe is a hypervisor for FreeBSD which started development in 2011. It consists of a kernel module <code class="language-plaintext highlighter-rouge">vmm.ko</code> which executes instructions closer to harder (for example, issuing VT-x instructions and modifying VMCS) and a set of userspace programs for emulating hardware, allowing users to launch/shutdown/destroy VMs, etc. This structure is similar to QEMU/KVM for Linux.</p> <p>Userspace programs mainly consist of three components: (1) <code class="language-plaintext highlighter-rouge">/usr/sbin/bhyve</code> performs CPU + hardware emulation, including emulation of virtio-pci, virtio-net, and virtio-blk (2) <code class="language-plaintext highlighter-rouge">usr/sbin/bhyveload</code> loads the OS image of a guest VM into the guest memory region, and (3) <code class="language-plaintext highlighter-rouge">/usr/sbin/bhyvectl</code> provides an interface for users to manage their VM instances. These userspace programs interface with <code class="language-plaintext highlighter-rouge">vmm.ko</code> via <code class="language-plaintext highlighter-rouge">libvmmapi</code>, which issues commands to <code class="language-plaintext highlighter-rouge">vmm.ko</code> via <code class="language-plaintext highlighter-rouge">mmap</code> and <code class="language-plaintext highlighter-rouge">ioctl</code>. A high-level system diagram is shown below.</p> <div class="row"> <div class="col-sm mt-3 mt-md-0 text-center"> <figure> <picture> <source class="responsive-img-srcset" srcset="/bhyve-imgs/bhyve-diagram-480.webp 480w,/bhyve-imgs/bhyve-diagram-800.webp 800w,/bhyve-imgs/bhyve-diagram-1400.webp 1400w," type="image/webp" sizes="95vw"></source> <img src="/bhyve-imgs/bhyve-diagram.png" class="img-fluid rounded z-depth-1" width="300" height="400" title="diagram" loading="eager" onerror="this.onerror=null; $('.responsive-img-srcset').remove();"> </picture> </figure> </div> </div> <div class="caption"> High-level architecture diagram of BHyVe. </div> <h1 id="control-loop">Control Loop</h1> <p>Let’s first start with the main control loop of running a VM instance. To initialize a VM instance, <code class="language-plaintext highlighter-rouge">usr/sbin/bhyveload</code> creates a device file in <code class="language-plaintext highlighter-rouge">/dev/vmm/</code>, and uses this device file to issue commands to <code class="language-plaintext highlighter-rouge">vmm.ko</code> to load the guest OS image into memory, initialize registers, set GDT/IDT, etc. Note that this article assumes that BHyVe does not support BIOS/UEFI, but this has been implemented in recent versions of BHyVe. Refer to <a href="#loading--initializing-guest-vm">this section</a> for a detailed explanation of loading + initializing guest VMs.</p> <p>After <code class="language-plaintext highlighter-rouge">usr/sbin/bhyveload</code> finishes initialization, <code class="language-plaintext highlighter-rouge">usr/sbin/bhyve</code> will open this <code class="language-plaintext highlighter-rouge">/dev/vmm/</code> file, initialize device emulators, spin up one thread for each vCPU, and issue <code class="language-plaintext highlighter-rouge">ioctl(VM_RUN)</code> to <code class="language-plaintext highlighter-rouge">vmm.ko</code>. <code class="language-plaintext highlighter-rouge">vmm.ko</code> will then perform VMENTRY to switch the CPU to non-root mode. Once a VMEXIT happens, <code class="language-plaintext highlighter-rouge">vmm.ko</code> will either handle the event internally, or return to <code class="language-plaintext highlighter-rouge">usr/sbin/bhyve</code> via <code class="language-plaintext highlighter-rouge">ioctl</code> if necessary (for instance, device emulation is required).</p> <div class="row"> <div class="col-sm mt-3 mt-md-0"> <figure> <picture> <source class="responsive-img-srcset" srcset="/bhyve-imgs/bhyve-arch-480.webp 480w,/bhyve-imgs/bhyve-arch-800.webp 800w,/bhyve-imgs/bhyve-arch-1400.webp 1400w," type="image/webp" sizes="95vw"></source> <img src="/bhyve-imgs/bhyve-arch.png" class="img-fluid rounded z-depth-1" width="100%" height="auto" title="arch" loading="eager" onerror="this.onerror=null; $('.responsive-img-srcset').remove();"> </picture> </figure> </div> </div> <div class="caption"> Main control loop of BHyVe. </div> <p>Now, let’s take a look at the source code for <code class="language-plaintext highlighter-rouge">usr/sbin/bhyve</code>, <code class="language-plaintext highlighter-rouge">libvmmapi</code>, <code class="language-plaintext highlighter-rouge">vmm.ko</code>, and device emulation.</p> <h2 id="usrsbinbhyve"><code class="language-plaintext highlighter-rouge">usr/sbin/bhyve</code></h2> <p>We first look at the entry point of the file <code class="language-plaintext highlighter-rouge">usr/sbin/bhyve/bhyverun.c</code>. Note that all of these code snippets are simplified, with some details such as error handling taken out for brevity.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span>
+<span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">argv</span><span class="p">[])</span>
+<span class="p">{</span>
+  <span class="k">while</span> <span class="p">((</span><span class="n">c</span> <span class="o">=</span> <span class="n">getopt</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">,</span> <span class="s">"abehABHIPxp:g:c:z:s:S:n:m:M:"</span><span class="p">))</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">vmname</span> <span class="o">=</span> <span class="n">argv</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+    <span class="n">ctx</span> <span class="o">=</span> <span class="n">vm_open</span><span class="p">(</span><span class="n">vmname</span><span class="p">);</span>  <span class="c1">// (1)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">ctx</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">perror</span><span class="p">(</span><span class="s">"vm_open"</span><span class="p">);</span>
+    <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+ 
+  <span class="k">if</span> <span class="p">(</span><span class="n">lomem_sz</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">lomem_addr</span> <span class="o">=</span> <span class="n">vm_map_memory</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">lomem_sz</span><span class="p">);</span> <span class="c1">// (2) </span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">lomem_addr</span> <span class="o">==</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span> <span class="n">MAP_FAILED</span><span class="p">)</span> <span class="p">{</span>
+      <span class="n">lomem_sz</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">himem_sz</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+      <span class="n">himem_addr</span> <span class="o">=</span> <span class="n">vm_map_memory</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="mi">4</span><span class="o">*</span><span class="n">GB</span><span class="p">,</span> <span class="n">himem_sz</span><span class="p">);</span>  <span class="c1">// (3)</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">himem_addr</span> <span class="o">==</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span> <span class="n">MAP_FAILED</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">lomem_sz</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="n">himem_sz</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+      <span class="p">}</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  
+  <span class="cm">/* (4) */</span> 
+  <span class="n">init_inout</span><span class="p">();</span> 
+  <span class="n">init_pci</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span> 
+  <span class="k">if</span> <span class="p">(</span><span class="n">ioapic</span><span class="p">)</span>
+    <span class="n">ioapic_init</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+  
+  <span class="cm">/* (5) */</span>
+  <span class="n">error</span> <span class="o">=</span> <span class="n">vm_get_register</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">BSP</span><span class="p">,</span> <span class="n">VM_REG_GUEST_RIP</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">rip</span><span class="p">);</span> 
+  <span class="n">assert</span><span class="p">(</span><span class="n">error</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+
+  <span class="n">mptable_build</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">guest_ncpus</span><span class="p">,</span> <span class="n">ioapic</span><span class="p">);</span>  <span class="c1">// (6)</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">acpi</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">error</span> <span class="o">=</span> <span class="n">acpi_build</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">guest_ncpus</span><span class="p">,</span> <span class="n">ioapic</span><span class="p">);</span>  <span class="c1">// (7)</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">error</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="p">}</span>
+
+  <span class="n">fbsdrun_addcpu</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">BSP</span><span class="p">,</span> <span class="n">rip</span><span class="p">);</span>   <span class="c1">// (8)</span>
+  <span class="p">...</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (1), the user passes in the name of the VM instance to start, and this program will open the corresponding <code class="language-plaintext highlighter-rouge">/dev/vmm</code> file. In (2) and (3), guest memory address space is mapped to low-memory and high-memory, respectively. In (4), the program initializes the emulators for I/O ports, PCI, and I/O APIC. In (5), the program obtains the value of guest RIP (instruction pointer). In (6), the program initializes the MP table (needed if more than 1 CPU). In (7), the program initializes ACPI.<br> In (8), the program launches the thread corresponding to CPU0 (BSP), passing in the guest RIP.</p> <p>Now, let’s look at the function <code class="language-plaintext highlighter-rouge">fbsdrun_addcpu</code>:</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span>
+<span class="nf">fbsdrun_addcpu</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">rip</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">error</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">cpumask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">vcpu</span><span class="p">))</span> <span class="p">{</span>
+    <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"addcpu: attempting to add existing cpu %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">);</span>
+    <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="n">cpumask</span> <span class="o">|=</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">vcpu</span><span class="p">;</span>
+  <span class="n">foundcpus</span><span class="o">++</span><span class="p">;</span>
+
+  <span class="cm">/* (9) */</span>
+  <span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">rip</span> <span class="o">=</span> <span class="n">rip</span><span class="p">;</span>
+  <span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">inst_length</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="n">vcpu</span> <span class="o">==</span> <span class="n">BSP</span> <span class="o">||</span> <span class="o">!</span><span class="n">guest_vcpu_mux</span><span class="p">){</span>
+    <span class="n">mt_vmm_info</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">mt_ctx</span> <span class="o">=</span> <span class="n">ctx</span><span class="p">;</span>
+    <span class="n">mt_vmm_info</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">mt_vcpu</span> <span class="o">=</span> <span class="n">vcpu</span><span class="p">;</span>
+    <span class="n">error</span> <span class="o">=</span> <span class="n">pthread_create</span><span class="p">(</span><span class="o">&amp;</span><span class="n">mt_vmm_info</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">mt_thr</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span>  <span class="c1">// (10)</span>
+                           <span class="n">fbsdrun_start_thread</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">mt_vmm_info</span><span class="p">[</span><span class="n">vcpu</span><span class="p">]);</span> 
+    <span class="n">assert</span><span class="p">(</span><span class="n">error</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (9), we set up the <code class="language-plaintext highlighter-rouge">vmexit</code> struct to allow the guest to resume execution at the desired location upon a VMEXIT. In (10), we spin up a thread to begin emulation of the vCPU. Let’s look at the function <code class="language-plaintext highlighter-rouge">fbsdrun_start_thread</code>:</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">void</span> <span class="o">*</span>
+<span class="nf">fbsdrun_start_thread</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">param</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">char</span> <span class="n">tname</span><span class="p">[</span><span class="n">MAXCOMLEN</span> <span class="o">+</span> <span class="mi">1</span><span class="p">];</span>
+  <span class="k">struct</span> <span class="n">mt_vmm_info</span> <span class="o">*</span><span class="n">mtp</span><span class="p">;</span>
+  <span class="kt">int</span> <span class="n">vcpu</span><span class="p">;</span>
+  <span class="n">mtp</span> <span class="o">=</span> <span class="n">param</span><span class="p">;</span>
+  <span class="n">vcpu</span> <span class="o">=</span> <span class="n">mtp</span><span class="o">-&gt;</span><span class="n">mt_vcpu</span><span class="p">;</span>
+  <span class="n">snprintf</span><span class="p">(</span><span class="n">tname</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">tname</span><span class="p">),</span> <span class="s">"%s vcpu %d"</span><span class="p">,</span> <span class="n">vmname</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">);</span>
+  <span class="n">pthread_set_name_np</span><span class="p">(</span><span class="n">mtp</span><span class="o">-&gt;</span><span class="n">mt_thr</span><span class="p">,</span> <span class="n">tname</span><span class="p">);</span>
+  <span class="n">vm_loop</span><span class="p">(</span><span class="n">mtp</span><span class="o">-&gt;</span><span class="n">mt_ctx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">rip</span><span class="p">);</span>  <span class="c1">// (11)</span>
+  
+  <span class="cm">/* will not reach here! */</span>
+  <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+  <span class="k">return</span> <span class="p">(</span><span class="nb">NULL</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>This function sets the name for the vCPU and begins the main control loop <code class="language-plaintext highlighter-rouge">vm_loop</code> in (11). Note that <code class="language-plaintext highlighter-rouge">vm_loop</code> is a <code class="language-plaintext highlighter-rouge">while (1)</code> loop, hence this function will never return. Let’s take a look at <code class="language-plaintext highlighter-rouge">vm_loop</code>:</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">vmexit_handler_t</span> <span class="n">handler</span><span class="p">[</span><span class="n">VM_EXITCODE_MAX</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_INOUT</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_inout</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_VMX</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_vmx</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_BOGUS</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_bogus</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_RDMSR</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_rdmsr</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_WRMSR</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_wrmsr</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_MTRAP</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_mtrap</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_PAGING</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_paging</span><span class="p">,</span>
+  <span class="p">[</span><span class="n">VM_EXITCODE_SPINUP_AP</span><span class="p">]</span> <span class="o">=</span> <span class="n">vmexit_spinup_ap</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="k">static</span> <span class="kt">void</span>
+<span class="nf">vm_loop</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">rip</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">error</span><span class="p">,</span> <span class="n">rc</span><span class="p">,</span> <span class="n">prevcpu</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">guest_vcpu_mux</span><span class="p">)</span>
+    <span class="n">setup_timeslice</span><span class="p">();</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">pincpu</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">error</span> <span class="o">=</span> <span class="n">vm_set_pinning</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">pincpu</span> <span class="o">+</span> <span class="n">vcpu</span><span class="p">);</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">error</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">while</span> <span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">error</span> <span class="o">=</span> <span class="n">vm_run</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">rip</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">]);</span>  <span class="c1">// (12)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">error</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+      <span class="cm">/*
+      * It is possible that 'vmmctl' or some other process
+      * has transitioned the vcpu to CANNOT_RUN state right
+      * before we tried to transition it to RUNNING.
+      * This is expected to be temporary so just retry.
+      */</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">errno</span> <span class="o">==</span> <span class="n">EBUSY</span><span class="p">)</span>
+        <span class="k">continue</span><span class="p">;</span>
+      <span class="k">else</span>
+        <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">prevcpu</span> <span class="o">=</span> <span class="n">vcpu</span><span class="p">;</span>
+    <span class="n">rc</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="n">handler</span><span class="p">[</span><span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">exitcode</span><span class="p">])(</span><span class="n">ctx</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">],</span> <span class="o">&amp;</span><span class="n">vcpu</span><span class="p">);</span>  <span class="c1">// (13)</span>
+    <span class="k">switch</span> <span class="p">(</span><span class="n">rc</span><span class="p">)</span> <span class="p">{</span> <span class="p">(</span><span class="mi">23</span><span class="p">)</span>
+      <span class="k">case</span> <span class="n">VMEXIT_SWITCH</span><span class="p">:</span>  <span class="c1">// (14) </span>
+        <span class="n">assert</span><span class="p">(</span><span class="n">guest_vcpu_mux</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">vcpu</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+          <span class="n">stats</span><span class="p">.</span><span class="n">cpu_switch_rotate</span><span class="o">++</span><span class="p">;</span>
+          <span class="n">vcpu</span> <span class="o">=</span> <span class="n">fbsdrun_get_next_cpu</span><span class="p">(</span><span class="n">prevcpu</span><span class="p">);</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+          <span class="n">stats</span><span class="p">.</span><span class="n">cpu_switch_direct</span><span class="o">++</span><span class="p">;</span>
+        <span class="p">}</span>
+      <span class="k">case</span> <span class="n">VMEXIT_CONTINUE</span><span class="p">:</span>  <span class="c1">// (15)</span>
+        <span class="n">rip</span> <span class="o">=</span> <span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">rip</span> <span class="o">+</span> <span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">inst_length</span><span class="p">;</span>
+        <span class="k">break</span><span class="p">;</span>
+      <span class="k">case</span> <span class="n">VMEXIT_RESTART</span><span class="p">:</span>   <span class="c1">// (16)</span>
+        <span class="n">rip</span> <span class="o">=</span> <span class="n">vmexit</span><span class="p">[</span><span class="n">vcpu</span><span class="p">].</span><span class="n">rip</span><span class="p">;</span>
+        <span class="k">break</span><span class="p">;</span>
+      <span class="k">case</span> <span class="n">VMEXIT_RESET</span><span class="p">:</span>     <span class="c1">// (17)</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+      <span class="nl">default:</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+  <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"vm_run error %d, errno %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">error</span><span class="p">,</span> <span class="n">errno</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (12), <code class="language-plaintext highlighter-rouge">/usr/sbin/bhyve</code> calls <code class="language-plaintext highlighter-rouge">vm_run</code>, which is an API provided by <code class="language-plaintext highlighter-rouge">libvmmapi</code> library to issue <code class="language-plaintext highlighter-rouge">ioctl</code> to <code class="language-plaintext highlighter-rouge">vmm.ko</code>. Once <code class="language-plaintext highlighter-rouge">vmm.ko</code> returns (for instance, device emulation is needed), this program invokes the correct handler based on <code class="language-plaintext highlighter-rouge">exitcode</code> field of <code class="language-plaintext highlighter-rouge">vmexit</code> struct. The program then either switches to a different vCPU (14), continues execution of the next guest instruction (15), reruns the current guest instruction (16), or exits vCPU emulation (17).</p> <h2 id="libvmmapi"><code class="language-plaintext highlighter-rouge">libvmmapi</code></h2> <p>Let’s take a look at the different API functions that <code class="language-plaintext highlighter-rouge">libvmmapi</code> provides to userspace programs for interfacing with <code class="language-plaintext highlighter-rouge">vmm.ko</code>.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vm_device_open</span><span class="p">(</span><span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="n">name</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">fd</span><span class="p">,</span> <span class="n">len</span><span class="p">;</span>
+  <span class="kt">char</span> <span class="o">*</span><span class="n">vmfile</span><span class="p">;</span>
+  <span class="n">len</span> <span class="o">=</span> <span class="n">strlen</span><span class="p">(</span><span class="s">"/dev/vmm/"</span><span class="p">)</span> <span class="o">+</span> <span class="n">strlen</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+  <span class="n">vmfile</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="n">len</span><span class="p">);</span>
+  <span class="n">assert</span><span class="p">(</span><span class="n">vmfile</span> <span class="o">!=</span> <span class="nb">NULL</span><span class="p">);</span>
+  <span class="n">snprintf</span><span class="p">(</span><span class="n">vmfile</span><span class="p">,</span> <span class="n">len</span><span class="p">,</span> <span class="s">"/dev/vmm/%s"</span><span class="p">,</span> <span class="n">name</span><span class="p">);</span>
+  
+  <span class="n">fd</span> <span class="o">=</span> <span class="n">open</span><span class="p">(</span><span class="n">vmfile</span><span class="p">,</span> <span class="n">O_RDWR</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>  <span class="c1">// (3)</span>
+  <span class="n">free</span><span class="p">(</span><span class="n">vmfile</span><span class="p">);</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">fd</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">vm_open</span><span class="p">(</span><span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="n">name</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">vm</span><span class="p">;</span>
+  <span class="n">vm</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span><span class="p">)</span> <span class="o">+</span> <span class="n">strlen</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>  <span class="c1">// (1)</span>
+  <span class="n">assert</span><span class="p">(</span><span class="n">vm</span> <span class="o">!=</span> <span class="nb">NULL</span><span class="p">);</span>
+  <span class="n">vm</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+  <span class="n">vm</span><span class="o">-&gt;</span><span class="n">name</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)(</span><span class="n">vm</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+  <span class="n">strcpy</span><span class="p">(</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">name</span><span class="p">,</span> <span class="n">name</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">fd</span> <span class="o">=</span> <span class="n">vm_device_open</span><span class="p">(</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">name</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>  <span class="c1">// (2)</span>
+    <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">vm</span><span class="p">);</span>
+
+<span class="nl">err:</span>
+  <span class="n">vm_destroy</span><span class="p">(</span><span class="n">vm</span><span class="p">);</span>
+  <span class="k">return</span> <span class="p">(</span><span class="nb">NULL</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (1) of the code of the <a href="#usrsbinbhyve">previous section</a>, we saw the function <code class="language-plaintext highlighter-rouge">vm_open</code>, which is implemented here. This function allocates a <code class="language-plaintext highlighter-rouge">vmctx</code> struct in (1), and opens the file descriptor in <code class="language-plaintext highlighter-rouge">/dev/vmm</code> by calling <code class="language-plaintext highlighter-rouge">vm_device_open</code> in (2). <code class="language-plaintext highlighter-rouge">vm_device_open</code> uses the underlying <code class="language-plaintext highlighter-rouge">open</code> syscall in (3).</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">char</span> <span class="o">*</span>
+<span class="nf">vm_map_memory</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="n">vm_paddr_t</span> <span class="n">gpa</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">len</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="k">return</span> <span class="p">((</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">mmap</span><span class="p">(</span><span class="nb">NULL</span><span class="p">,</span> <span class="n">len</span><span class="p">,</span> <span class="n">PROT_READ</span> <span class="o">|</span> <span class="n">PROT_WRITE</span><span class="p">,</span> <span class="n">MAP_SHARED</span><span class="p">,</span>
+                       <span class="n">ctx</span><span class="o">-&gt;</span><span class="n">fd</span><span class="p">,</span> <span class="n">gpa</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (2) and (3) of the code of the <a href="#usrsbinbhyve">previous section</a>, we saw the function <code class="language-plaintext highlighter-rouge">vm_map_memory</code>, which is implemented here. This function maps the VM device file <code class="language-plaintext highlighter-rouge">/dev/vmm</code> into guest physical address <code class="language-plaintext highlighter-rouge">gpa</code> using the <code class="language-plaintext highlighter-rouge">mmap</code> syscall.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span>
+<span class="nf">vm_get_register</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="kt">int</span> <span class="n">reg</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">ret_val</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">error</span><span class="p">;</span>
+  <span class="k">struct</span> <span class="n">vm_register</span> <span class="n">vmreg</span><span class="p">;</span>
+  <span class="n">bzero</span><span class="p">(</span><span class="o">&amp;</span><span class="n">vmreg</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">vmreg</span><span class="p">));</span>
+  <span class="n">vmreg</span><span class="p">.</span><span class="n">cpuid</span> <span class="o">=</span> <span class="n">vcpu</span><span class="p">;</span>
+  <span class="n">vmreg</span><span class="p">.</span><span class="n">regnum</span> <span class="o">=</span> <span class="n">reg</span><span class="p">;</span>
+  <span class="n">error</span> <span class="o">=</span> <span class="n">ioctl</span><span class="p">(</span><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">fd</span><span class="p">,</span> <span class="n">VM_GET_REGISTER</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">vmreg</span><span class="p">);</span>  <span class="c1">// (3)</span>
+  <span class="o">*</span><span class="n">ret_val</span> <span class="o">=</span> <span class="n">vmreg</span><span class="p">.</span><span class="n">regval</span><span class="p">;</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">error</span><span class="p">);</span>
+  <span class="p">}</span>
+</code></pre></div></div> <p>In (5) of the code of the <a href="#usrsbinbhyve">previous section</a>, we saw the function <code class="language-plaintext highlighter-rouge">vm_get_register</code>, which is implemented here. This function is simply a wrapper around <code class="language-plaintext highlighter-rouge">ioctl(VM_GET_REGISTER)</code>, which is a command to <code class="language-plaintext highlighter-rouge">vmm.ko</code>. This function then takes the return value from <code class="language-plaintext highlighter-rouge">vmm.ko</code> and sets the <code class="language-plaintext highlighter-rouge">regval</code> field in <code class="language-plaintext highlighter-rouge">struct vm_register</code>.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span>
+<span class="nf">vm_run</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">rip</span><span class="p">,</span> <span class="k">struct</span> <span class="n">vm_exit</span> <span class="o">*</span><span class="n">vmexit</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">error</span><span class="p">;</span>
+  <span class="k">struct</span> <span class="n">vm_run</span> <span class="n">vmrun</span><span class="p">;</span>
+  <span class="n">bzero</span><span class="p">(</span><span class="o">&amp;</span><span class="n">vmrun</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">vmrun</span><span class="p">));</span>
+  <span class="n">vmrun</span><span class="p">.</span><span class="n">cpuid</span> <span class="o">=</span> <span class="n">vcpu</span><span class="p">;</span>
+  <span class="n">vmrun</span><span class="p">.</span><span class="n">rip</span> <span class="o">=</span> <span class="n">rip</span><span class="p">;</span>
+  <span class="n">error</span> <span class="o">=</span> <span class="n">ioctl</span><span class="p">(</span><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">fd</span><span class="p">,</span> <span class="n">VM_RUN</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">vmrun</span><span class="p">);</span> <span class="p">(</span><span class="mi">19</span><span class="p">)</span>
+  <span class="n">bcopy</span><span class="p">(</span><span class="o">&amp;</span><span class="n">vmrun</span><span class="p">.</span><span class="n">vm_exit</span><span class="p">,</span> <span class="n">vmexit</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">vm_exit</span><span class="p">));</span>  <span class="c1">// (4)</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">error</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (12) of the code of the <a href="#usrsbinbhyve">previous section</a>, we saw the function <code class="language-plaintext highlighter-rouge">vm_run</code>, which is implemented here. This function is simply a wrapper around <code class="language-plaintext highlighter-rouge">ioctl(VM_RUN)</code>, which starts guest execution at <code class="language-plaintext highlighter-rouge">vmmrun.rip</code>. If a VMEXIT occurs that <code class="language-plaintext highlighter-rouge">vmm.ko</code> cannot handle by itself, <code class="language-plaintext highlighter-rouge">ioctl</code> will return with an error code. This function stores the exit information in <code class="language-plaintext highlighter-rouge">vmrun.vm_exit</code> in (4).</p> <h2 id="vmmko"><code class="language-plaintext highlighter-rouge">vmm.ko</code></h2> <p>We now look at the implementation of the kernel module <code class="language-plaintext highlighter-rouge">vmm.ko</code>.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vmmdev_ioctl</span><span class="p">(</span><span class="k">struct</span> <span class="n">cdev</span> <span class="o">*</span><span class="n">cdev</span><span class="p">,</span> <span class="n">u_long</span> <span class="n">cmd</span><span class="p">,</span> <span class="n">caddr_t</span> <span class="n">data</span><span class="p">,</span> <span class="kt">int</span> <span class="n">fflag</span><span class="p">,</span>
+             <span class="k">struct</span> <span class="kr">thread</span> <span class="o">*</span><span class="n">td</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="k">switch</span><span class="p">(</span><span class="n">cmd</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">case</span> <span class="n">VM_RUN</span><span class="p">:</span>
+    <span class="n">vmrun</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">vm_run</span> <span class="o">*</span><span class="p">)</span><span class="n">data</span><span class="p">;</span>
+    <span class="n">error</span> <span class="o">=</span> <span class="n">vm_run</span><span class="p">(</span><span class="n">sc</span><span class="o">-&gt;</span><span class="n">vm</span><span class="p">,</span> <span class="n">vmrun</span><span class="p">);</span> 
+    <span class="k">break</span><span class="p">;</span>
+  <span class="p">...</span>
+<span class="p">}</span>
+  <span class="p">...</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="kt">int</span>
+<span class="nf">sysctl_vmm_create</span><span class="p">(</span><span class="n">SYSCTL_HANDLER_ARGS</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="p">...</span>
+  <span class="n">vm</span> <span class="o">=</span> <span class="n">vm_create</span><span class="p">(</span><span class="n">buf</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p><code class="language-plaintext highlighter-rouge">vmm_dev.c</code> defines the handlers for various operations on the VM device file in <code class="language-plaintext highlighter-rouge">/dev/vmm</code>, including <code class="language-plaintext highlighter-rouge">open()</code>, <code class="language-plaintext highlighter-rouge">close()</code>, <code class="language-plaintext highlighter-rouge">read()</code>, <code class="language-plaintext highlighter-rouge">write()</code>, <code class="language-plaintext highlighter-rouge">mmap()</code>, <code class="language-plaintext highlighter-rouge">ioctl()</code>. The <code class="language-plaintext highlighter-rouge">ioctl()</code> handler is shown above, which switches on <code class="language-plaintext highlighter-rouge">cmd</code> and invokes the desired function, in this case <code class="language-plaintext highlighter-rouge">vm_run</code> in response to <code class="language-plaintext highlighter-rouge">VM_RUN</code>. The function below is used to create a new VM instance using <code class="language-plaintext highlighter-rouge">vm_create</code>.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="k">struct</span> <span class="n">vmm_ops</span> <span class="o">*</span><span class="n">ops</span><span class="p">;</span>
+<span class="cp">#define VMINIT(vm) (ops != NULL ? (*ops-&gt;vminit)(vm): NULL)
+#define VMRUN(vmi, vcpu, rip) (ops != NULL ? (*ops-&gt;vmrun)(vmi, vcpu, rip) : ENXIO)
+</span>
+<span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vmm_init</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">vmm_is_intel</span><span class="p">())</span>
+    <span class="n">ops</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">vmm_ops_intel</span><span class="p">;</span>
+  <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">vmm_is_amd</span><span class="p">())</span>
+    <span class="n">ops</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">vmm_ops_amd</span><span class="p">;</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">VMM_INIT</span><span class="p">());</span>
+<span class="p">}</span>
+
+<span class="k">struct</span> <span class="n">vm</span> <span class="o">*</span>
+<span class="nf">vm_create</span><span class="p">(</span><span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="n">name</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">vm</span><span class="o">-&gt;</span><span class="n">cookie</span> <span class="o">=</span> <span class="n">VMINIT</span><span class="p">(</span><span class="n">vm</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span>
+<span class="nf">vm_run</span><span class="p">(</span><span class="k">struct</span> <span class="n">vm</span> <span class="o">*</span><span class="n">vm</span><span class="p">,</span> <span class="k">struct</span> <span class="n">vm_run</span> <span class="o">*</span><span class="n">vmrun</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">vcpuid</span> <span class="o">=</span> <span class="n">vmrun</span><span class="o">-&gt;</span><span class="n">cpuid</span><span class="p">;</span>
+  <span class="n">rip</span> <span class="o">=</span> <span class="n">vmrun</span><span class="o">-&gt;</span><span class="n">rip</span><span class="p">;</span>
+  <span class="n">error</span> <span class="o">=</span> <span class="n">VMRUN</span><span class="p">(</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">cookie</span><span class="p">,</span> <span class="n">vcpuid</span><span class="p">,</span> <span class="n">rip</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p><code class="language-plaintext highlighter-rouge">vm_create</code> is a wrapper around the macro <code class="language-plaintext highlighter-rouge">VMINIT</code>, which invokes the architecture- dependent function stored in <code class="language-plaintext highlighter-rouge">struct vm_ops</code> (for example, there are separate initialization functions for VMX and SVM). Similarly, <code class="language-plaintext highlighter-rouge">vm_run</code> is a wrapper around the macro <code class="language-plaintext highlighter-rouge">VMRUN</code>. Note that <code class="language-plaintext highlighter-rouge">vmm_init</code> chooses the correct <code class="language-plaintext highlighter-rouge">struct vm_ops</code> based on the hardware architecture.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="n">vmm_ops</span> <span class="n">vmm_ops_intel</span> <span class="o">=</span> <span class="p">{</span>  <span class="c1">// (1)</span>
+  <span class="n">vmx_init</span><span class="p">,</span>
+  <span class="n">vmx_cleanup</span><span class="p">,</span>
+  <span class="n">vmx_vminit</span><span class="p">,</span> 
+  <span class="n">vmx_run</span><span class="p">,</span>
+  <span class="n">vmx_vmcleanup</span><span class="p">,</span>
+  <span class="n">ept_vmmmap_set</span><span class="p">,</span>
+  <span class="n">ept_vmmmap_get</span><span class="p">,</span>
+  <span class="n">vmx_getreg</span><span class="p">,</span>
+  <span class="n">vmx_setreg</span><span class="p">,</span>
+  <span class="n">vmx_getdesc</span><span class="p">,</span>
+  <span class="n">vmx_setdesc</span><span class="p">,</span>
+  <span class="n">vmx_inject</span><span class="p">,</span>
+  <span class="n">vmx_getcap</span><span class="p">,</span>
+  <span class="n">vmx_setcap</span>
+<span class="p">};</span>
+
+<span class="k">static</span> <span class="kt">void</span> <span class="o">*</span>
+<span class="nf">vmx_vminit</span><span class="p">(</span><span class="k">struct</span> <span class="n">vm</span> <span class="o">*</span><span class="n">vm</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">VM_MAXCPU</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span> 
+  <span class="cm">/* (2) */</span>
+  <span class="n">error</span> <span class="o">=</span> <span class="n">vmcs_set_defaults</span><span class="p">(</span><span class="o">&amp;</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">vmcs</span><span class="p">[</span><span class="n">i</span><span class="p">],</span>
+                            <span class="p">(</span><span class="n">u_long</span><span class="p">)</span><span class="n">vmx_longjmp</span><span class="p">,</span>
+                            <span class="p">(</span><span class="n">u_long</span><span class="p">)</span><span class="o">&amp;</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">ctx</span><span class="p">[</span><span class="n">i</span><span class="p">],</span>
+                            <span class="n">vtophys</span><span class="p">(</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">pml4ept</span><span class="p">),</span>
+                            <span class="n">pinbased_ctls</span><span class="p">,</span>
+                            <span class="n">procbased_ctls</span><span class="p">,</span>
+                            <span class="n">procbased_ctls2</span><span class="p">,</span>
+                            <span class="n">exit_ctls</span><span class="p">,</span> <span class="n">entry_ctls</span><span class="p">,</span>
+                            <span class="n">vtophys</span><span class="p">(</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">msr_bitmap</span><span class="p">),</span>
+                            <span class="n">vpid</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">vmx</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vmx_run</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">register_t</span> <span class="n">rip</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">vmxctx</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">ctx</span><span class="p">[</span><span class="n">vcpu</span><span class="p">];</span>
+  <span class="cm">/* (3) */</span>
+  <span class="n">VMPTRLD</span><span class="p">(</span><span class="n">vmcs</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">error</span> <span class="o">=</span> <span class="n">vmwrite</span><span class="p">(</span><span class="n">VMCS_HOST_CR3</span><span class="p">,</span> <span class="n">rcr3</span><span class="p">()))</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">panic</span><span class="p">(</span><span class="s">"vmx_run: error %d writing to VMCS_HOST_CR3"</span><span class="p">,</span> <span class="n">error</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">error</span> <span class="o">=</span> <span class="n">vmwrite</span><span class="p">(</span><span class="n">VMCS_GUEST_RIP</span><span class="p">,</span> <span class="n">rip</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+    <span class="n">panic</span><span class="p">(</span><span class="s">"vmx_run: error %d writing to VMCS_GUEST_RIP"</span><span class="p">,</span> <span class="n">error</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">error</span> <span class="o">=</span> <span class="n">vmx_set_pcpu_defaults</span><span class="p">(</span><span class="n">vmx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">panic</span><span class="p">(</span><span class="s">"vmx_run: error %d setting up pcpu defaults"</span><span class="p">,</span> <span class="n">error</span><span class="p">);</span>
+
+  <span class="k">do</span> <span class="p">{</span>  <span class="c1">// (4) </span>
+    <span class="n">lapic_timer_tick</span><span class="p">(</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">vm</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">);</span>
+    <span class="n">vmx_inject_interrupts</span><span class="p">(</span><span class="n">vmx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">);</span>
+    <span class="n">vmx_run_trace</span><span class="p">(</span><span class="n">vmx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">);</span>
+    <span class="n">rc</span> <span class="o">=</span> <span class="n">vmx_setjmp</span><span class="p">(</span><span class="n">vmxctx</span><span class="p">);</span>  <span class="c1">// (5)</span>
+    <span class="k">switch</span> <span class="p">(</span><span class="n">rc</span><span class="p">)</span> <span class="p">{</span>
+      <span class="k">case</span> <span class="n">VMX_RETURN_DIRECT</span><span class="p">:</span> 
+        <span class="k">if</span> <span class="p">(</span><span class="n">vmxctx</span><span class="o">-&gt;</span><span class="n">launched</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span> 
+          <span class="n">vmxctx</span><span class="o">-&gt;</span><span class="n">launched</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+          <span class="n">vmx_launch</span><span class="p">(</span><span class="n">vmxctx</span><span class="p">);</span>   <span class="c1">// (6)</span>
+        <span class="p">}</span> <span class="k">else</span>
+          <span class="n">vmx_resume</span><span class="p">(</span><span class="n">vmxctx</span><span class="p">);</span>   <span class="c1">// (7)</span>
+          <span class="n">panic</span><span class="p">(</span><span class="s">"vmx_launch/resume should not return"</span><span class="p">);</span>
+        <span class="k">break</span><span class="p">;</span>
+      <span class="p">...</span>
+    <span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">handled</span><span class="p">);</span>
+    <span class="n">VMCLEAR</span><span class="p">(</span><span class="n">vmcs</span><span class="p">);</span>
+    <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>(1) is the <code class="language-plaintext highlighter-rouge">struct vm_ops</code> used to store operations for Intel VMX, including <code class="language-plaintext highlighter-rouge">vmx_vminit</code> and <code class="language-plaintext highlighter-rouge">vmx_run</code>. (2) is used to set the VMCS. Note that the host RIP is set as <code class="language-plaintext highlighter-rouge">vmx_longjmp</code>, i.e. on every VMEXIT <code class="language-plaintext highlighter-rouge">vmx_longjmp</code> will be called.</p> <p>For <code class="language-plaintext highlighter-rouge">vmx_run</code>, in (3) the function will set the host CR3 and guest RIP. In (4), <code class="language-plaintext highlighter-rouge">vmm.ko</code> will handle VMEXITs internally, unless userspace emulation is required. In (5), the function will call <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> which is mainly written in assembly to save host registers and other host state. On a VMEXIT, <code class="language-plaintext highlighter-rouge">vmx_longjmp</code> will return to the instruction after <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> (similar to <code class="language-plaintext highlighter-rouge">setjmp</code> and <code class="language-plaintext highlighter-rouge">longjmp</code> in C). Depending on whether VMENTRY occurs for the first time or not, either <code class="language-plaintext highlighter-rouge">vmx_launch</code> (6) or <code class="language-plaintext highlighter-rouge">vmx_resume</code> (7) is called.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span>
+<span class="nf">vmcs_set_defaults</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmcs</span> <span class="o">*</span><span class="n">vmcs</span><span class="p">,</span>
+                  <span class="n">u_long</span> <span class="n">host_rip</span><span class="p">,</span> <span class="n">u_long</span> <span class="n">host_rsp</span><span class="p">,</span> <span class="n">u_long</span> <span class="n">ept_pml4</span><span class="p">,</span>
+                  <span class="kt">uint32_t</span> <span class="n">pinbased_ctls</span><span class="p">,</span> <span class="kt">uint32_t</span> <span class="n">procbased_ctls</span><span class="p">,</span>
+                  <span class="kt">uint32_t</span> <span class="n">procbased_ctls2</span><span class="p">,</span> <span class="kt">uint32_t</span> <span class="n">exit_ctls</span><span class="p">,</span>
+                  <span class="kt">uint32_t</span> <span class="n">entry_ctls</span><span class="p">,</span> <span class="n">u_long</span> <span class="n">msr_bitmap</span><span class="p">,</span> <span class="kt">uint16_t</span> <span class="n">vpid</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">VMPTRLD</span><span class="p">(</span><span class="n">vmcs</span><span class="p">);</span>
+  <span class="p">...</span>
+  <span class="cm">/* Instruction Pointer */</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">error</span> <span class="o">=</span> <span class="n">vmwrite</span><span class="p">(</span><span class="n">VMCS_HOST_RIP</span><span class="p">,</span> <span class="n">host_rip</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="k">goto</span> <span class="n">done</span><span class="p">;</span>
+  <span class="p">...</span>
+  <span class="n">VMCLEAR</span><span class="p">(</span><span class="n">vmcs</span><span class="p">);</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">error</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>This function is used to initialize the VMCS. Note that we must call <code class="language-plaintext highlighter-rouge">VMPTRLD</code> to point the CPU to the VMCS before writing fields (we only show setting the host RIP here). We use <code class="language-plaintext highlighter-rouge">VMCLEAR</code> after modifying the fields to flush the VMCS from cache to memory, to ensure that every pCPU has a consistent view of the VMCS in-memory.</p> <pre><code class="language-asm">#define VMX_GUEST_RESTORE \
+  movq %rdi,%rsp; \
+  movq VMXCTX_GUEST_CR2(%rdi),%rsi; \
+  movq %rsi,%cr2; \
+  movq VMXCTX_GUEST_RSI(%rdi),%rsi; \
+  movq VMXCTX_GUEST_RDX(%rdi),%rdx; \
+  movq VMXCTX_GUEST_RCX(%rdi),%rcx; \
+  movq VMXCTX_GUEST_R8(%rdi),%r8; \
+  movq VMXCTX_GUEST_R9(%rdi),%r9; \
+  movq VMXCTX_GUEST_RAX(%rdi),%rax; \
+  movq VMXCTX_GUEST_RBX(%rdi),%rbx; \
+  movq VMXCTX_GUEST_RBP(%rdi),%rbp; \
+  movq VMXCTX_GUEST_R10(%rdi),%r10; \
+  movq VMXCTX_GUEST_R11(%rdi),%r11; \
+  movq VMXCTX_GUEST_R12(%rdi),%r12; \
+  movq VMXCTX_GUEST_R13(%rdi),%r13; \
+  movq VMXCTX_GUEST_R14(%rdi),%r14; \
+  movq VMXCTX_GUEST_R15(%rdi),%r15; \
+  movq VMXCTX_GUEST_RDI(%rdi),%rdi;
+
+#define VM_INSTRUCTION_ERROR(reg) \
+  jnc 1f; \
+  movl $VM_FAIL_INVALID,reg; /* CF is set */ \
+  jmp 3f; \
+  1: jnz 2f; \
+  movl $VM_FAIL_VALID,reg; /* ZF is set */ \
+  jmp 3f; \
+  2: movl $VM_SUCCESS,reg; \
+  3: movl reg,VMXCTX_LAUNCH_ERROR(%rsp)
+
+ENTRY(vmx_setjmp)
+  movq (%rsp),%rax  /* return address */
+  movq %r15,VMXCTX_HOST_R15(%rdi)
+  movq %r14,VMXCTX_HOST_R14(%rdi)
+  movq %r13,VMXCTX_HOST_R13(%rdi)
+  movq %r12,VMXCTX_HOST_R12(%rdi)
+  movq %rbp,VMXCTX_HOST_RBP(%rdi)
+  movq %rsp,VMXCTX_HOST_RSP(%rdi)
+  movq %rbx,VMXCTX_HOST_RBX(%rdi)
+  movq %rax,VMXCTX_HOST_RIP(%rdi)
+  movl $VMX_RETURN_DIRECT,%eax
+  ret
+END(vmx_setjmp)
+
+ENTRY(vmx_launch) 
+  VMX_DISABLE_INTERRUPTS
+  VMX_CHECK_AST
+  VMX_GUEST_RESTORE 
+  vmlaunch
+
+  VM_INSTRUCTION_ERROR(%eax)
+  movq %rsp,%rdi
+  movq $VMX_RETURN_VMLAUNCH,%rsi
+  addq $VMXCTX_TMPSTKTOP,%rsp
+  callq vmx_return
+END(vmx_launch)
+</code></pre> <p>These are some x86 assembly functions for performing saving/restoring of host/guest registers and issuing VT-x instructions. In <code class="language-plaintext highlighter-rouge">vmx_setjmp</code>, we save the host registers into <code class="language-plaintext highlighter-rouge">vmxctx</code> that are not automatically saved by VMCS. In <code class="language-plaintext highlighter-rouge">vmx_launch</code>, we first disable interrupts, restore guest state not automatically restored by VMCS (using a helper macro), then issue <code class="language-plaintext highlighter-rouge">VMLAUNCH</code> instruction. If <code class="language-plaintext highlighter-rouge">VMLAUNCH</code> fails, we record the failure information and call <code class="language-plaintext highlighter-rouge">vmx_return</code>. Otherwise, upon a <code class="language-plaintext highlighter-rouge">VMEXIT</code>, <code class="language-plaintext highlighter-rouge">vmx_longjmp</code> will be called. We show <code class="language-plaintext highlighter-rouge">vmx_return</code> and <code class="language-plaintext highlighter-rouge">vmx_longjmp</code> next.</p> <pre><code class="language-asm">ENTRY(vmx_return)
+  movq VMXCTX_HOST_R15(%rdi),%r15
+  movq VMXCTX_HOST_R14(%rdi),%r14
+  movq VMXCTX_HOST_R13(%rdi),%r13
+  movq VMXCTX_HOST_R12(%rdi),%r12
+  movq VMXCTX_HOST_RBP(%rdi),%rbp
+  movq VMXCTX_HOST_RSP(%rdi),%rsp
+  movq VMXCTX_HOST_RBX(%rdi),%rbx
+  movq VMXCTX_HOST_RIP(%rdi),%rax 
+  movq %rax,(%rsp) /* return address */ 
+
+  movl %esi,%eax
+  ret 
+END(vmx_return)
+
+/*
+* void vmx_longjmp(void)
+* %rsp points to the struct vmxctx
+*/
+ENTRY(vmx_longjmp)
+  movq %rdi,VMXCTX_GUEST_RDI(%rsp)
+  movq %rsi,VMXCTX_GUEST_RSI(%rsp)
+  movq %rdx,VMXCTX_GUEST_RDX(%rsp)
+  movq %rcx,VMXCTX_GUEST_RCX(%rsp)
+  movq %r8,VMXCTX_GUEST_R8(%rsp)
+  movq %r9,VMXCTX_GUEST_R9(%rsp)
+  movq %rax,VMXCTX_GUEST_RAX(%rsp)
+  movq %rbx,VMXCTX_GUEST_RBX(%rsp)
+  movq %rbp,VMXCTX_GUEST_RBP(%rsp)
+  movq %r10,VMXCTX_GUEST_R10(%rsp)
+  movq %r11,VMXCTX_GUEST_R11(%rsp)
+  movq %r12,VMXCTX_GUEST_R12(%rsp)
+  movq %r13,VMXCTX_GUEST_R13(%rsp)
+  movq %r14,VMXCTX_GUEST_R14(%rsp)
+  movq %r15,VMXCTX_GUEST_R15(%rsp)
+  movq %cr2,%rdi
+  movq %rdi,VMXCTX_GUEST_CR2(%rsp)
+  movq %rsp,%rdi
+  movq $VMX_RETURN_LONGJMP,%rsi
+  addq $VMXCTX_TMPSTKTOP,%rsp
+  callq vmx_return
+END(vmx_longjmp)
+</code></pre> <p><code class="language-plaintext highlighter-rouge">vmx_return</code> restores host state from <code class="language-plaintext highlighter-rouge">vmxctx</code> struct, then returns to the instruction after <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> (observe that <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> saves %RAX into %RSP, which <code class="language-plaintext highlighter-rouge">vmx_return</code> restores, places on the stack, and executes <code class="language-plaintext highlighter-rouge">ret</code>). <code class="language-plaintext highlighter-rouge">vmx_longjmp</code> saves guest registers, then calls <code class="language-plaintext highlighter-rouge">vmx_return</code>, which returns to the instruction after <code class="language-plaintext highlighter-rouge">vmx_setjmp</code>. If <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> returns normally, the return value (held in %RSI) is 0, but if <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> returns through <code class="language-plaintext highlighter-rouge">vmx_longjmp</code>, the return value is 1 (which is the value of <code class="language-plaintext highlighter-rouge">$VMX_RETURN_LONGJMP</code>).</p> <p>We now return to <code class="language-plaintext highlighter-rouge">vmx_run</code>. Previously, we only showed the case when <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> returned normally, that is, <code class="language-plaintext highlighter-rouge">vmm.ko</code> is about to VMENTER. Now, we show the case when <code class="language-plaintext highlighter-rouge">vmx_setjmp</code> returns via <code class="language-plaintext highlighter-rouge">vmx_longjmp</code>, i.e. we return to <code class="language-plaintext highlighter-rouge">vmm.ko</code> via VMEXIT, and now <code class="language-plaintext highlighter-rouge">vmm.ko</code> must perform the necessary handling or return to userspace if necessary.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vmx_run</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">register_t</span> <span class="n">rip</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="p">...</span>
+<span class="k">do</span> <span class="p">{</span>
+  <span class="n">rc</span> <span class="o">=</span> <span class="n">vmx_setjmp</span><span class="p">(</span><span class="n">vmxctx</span><span class="p">);</span> 
+  <span class="k">switch</span> <span class="p">(</span><span class="n">rc</span><span class="p">)</span> <span class="p">{</span>
+    <span class="p">...</span>
+    <span class="k">case</span> <span class="n">VMX_RETURN_LONGJMP</span><span class="p">:</span> 
+      <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">enable_intr</span><span class="p">();</span>  <span class="c1">// (8)</span>
+
+    <span class="cm">/* (9) */</span>
+    <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">rip</span> <span class="o">=</span> <span class="n">rip</span> <span class="o">=</span> <span class="n">vmcs_guest_rip</span><span class="p">();</span> 
+    <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">inst_length</span> <span class="o">=</span> <span class="n">vmexit_instruction_length</span><span class="p">();</span> 
+    <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">vmx</span><span class="p">.</span><span class="n">exit_reason</span> <span class="o">=</span> <span class="n">exit_reason</span> <span class="o">=</span> <span class="n">vmcs_exit_reason</span><span class="p">();</span> 
+    <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">vmx</span><span class="p">.</span><span class="n">exit_qualification</span> <span class="o">=</span> <span class="n">vmcs_exit_qualification</span><span class="p">();</span> 
+
+    <span class="n">handled</span> <span class="o">=</span> <span class="n">vmx_exit_process</span><span class="p">(</span><span class="n">vmx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">vmexit</span><span class="p">);</span>  <span class="c1">// (10)</span>
+    <span class="n">vmx_exit_trace</span><span class="p">(</span><span class="n">vmx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">rip</span><span class="p">,</span> <span class="n">exit_reason</span><span class="p">,</span> <span class="n">handled</span><span class="p">);</span>
+  <span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">handled</span><span class="p">);</span>
+  <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (8), we enable interrupts. In (9), we save information about the VMEXIT. In (10), we call <code class="language-plaintext highlighter-rouge">vmx_exit_process</code>, which sets handled to 1 iff <code class="language-plaintext highlighter-rouge">vmm.ko</code> is able to handle everything internally. Otherwise, we break out of the loop and return back to userspace (i.e. <code class="language-plaintext highlighter-rouge">ioctl</code> returns). Next, we look at the function <code class="language-plaintext highlighter-rouge">vmx_exit_process</code>, specifically the case when the guest VM has performed I/O and device emulation, i.e. <code class="language-plaintext highlighter-rouge">handled = 0</code>:</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vmx_exit_process</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmx</span> <span class="o">*</span><span class="n">vmx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="k">struct</span> <span class="n">vm_exit</span> <span class="o">*</span><span class="n">vmexit</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">error</span><span class="p">,</span> <span class="n">handled</span><span class="p">;</span>
+  <span class="k">struct</span> <span class="n">vmcs</span> <span class="o">*</span><span class="n">vmcs</span><span class="p">;</span>
+  <span class="k">struct</span> <span class="n">vmxctx</span> <span class="o">*</span><span class="n">vmxctx</span><span class="p">;</span>
+  <span class="kt">uint32_t</span> <span class="n">eax</span><span class="p">,</span> <span class="n">ecx</span><span class="p">,</span> <span class="n">edx</span><span class="p">;</span>
+  <span class="kt">uint64_t</span> <span class="n">qual</span><span class="p">,</span> <span class="n">gla</span><span class="p">,</span> <span class="n">gpa</span><span class="p">,</span> <span class="n">cr3</span><span class="p">,</span> <span class="n">intr_info</span><span class="p">;</span>
+  <span class="n">vmcs</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">vmcs</span><span class="p">[</span><span class="n">vcpu</span><span class="p">];</span>
+  <span class="n">vmxctx</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">vmx</span><span class="o">-&gt;</span><span class="n">ctx</span><span class="p">[</span><span class="n">vcpu</span><span class="p">];</span>
+  <span class="n">qual</span> <span class="o">=</span> <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">vmx</span><span class="p">.</span><span class="n">exit_qualification</span><span class="p">;</span>  <span class="c1">// (11)</span>
+  <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">exitcode</span> <span class="o">=</span> <span class="n">VM_EXITCODE_BOGUS</span><span class="p">;</span>
+  <span class="k">switch</span> <span class="p">(</span><span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">vmx</span><span class="p">.</span><span class="n">exit_reason</span><span class="p">)</span> <span class="p">{</span>  <span class="c1">// (12)</span>
+    <span class="p">...</span>
+    <span class="k">case</span> <span class="n">EXIT_REASON_INOUT</span><span class="p">:</span> 
+      <span class="cm">/* (13) */</span>
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">exitcode</span> <span class="o">=</span> <span class="n">VM_EXITCODE_INOUT</span><span class="p">;</span> 
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">bytes</span> <span class="o">=</span> <span class="p">(</span><span class="n">qual</span> <span class="o">&amp;</span> <span class="mh">0x7</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span> 
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">in</span> <span class="o">=</span> <span class="p">(</span><span class="n">qual</span> <span class="o">&amp;</span> <span class="mh">0x8</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span> <span class="o">:</span> <span class="mi">0</span><span class="p">;</span> 
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">string</span> <span class="o">=</span> <span class="p">(</span><span class="n">qual</span> <span class="o">&amp;</span> <span class="mh">0x10</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span> <span class="o">:</span> <span class="mi">0</span><span class="p">;</span> 
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">rep</span> <span class="o">=</span> <span class="p">(</span><span class="n">qual</span> <span class="o">&amp;</span> <span class="mh">0x20</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span> <span class="o">:</span> <span class="mi">0</span><span class="p">;</span> 
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">port</span> <span class="o">=</span> <span class="p">(</span><span class="kt">uint16_t</span><span class="p">)(</span><span class="n">qual</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">);</span> 
+      <span class="n">vmexit</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">eax</span> <span class="o">=</span> <span class="p">(</span><span class="kt">uint32_t</span><span class="p">)(</span><span class="n">vmxctx</span><span class="o">-&gt;</span><span class="n">guest_rax</span><span class="p">);</span> 
+      <span class="k">break</span><span class="p">;</span>
+    <span class="nl">default:</span>
+      <span class="k">break</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="p">(</span><span class="n">handled</span><span class="p">);</span> 
+<span class="p">}</span>
+</code></pre></div></div> <p>In (11), we get Exit Qualification information (from VMCS). In (12), we switch on Exit Reason. In (13), we save all necessary information in <code class="language-plaintext highlighter-rouge">struct vm_exit</code>, including length of access (number of bytes), direction of access, whether the access is a string, whether the access contains a rep-prefix (to indicate number of repetitions of the instruction), and port number. Since device emulation in userspace is necessary, this function does not set <code class="language-plaintext highlighter-rouge">handled</code>, i.e. 0 is returned.</p> <h1 id="device-emulation">Device Emulation</h1> <p>In this section, we look at device emulation in userspace. In the above code snippets, <code class="language-plaintext highlighter-rouge">vmm.ko</code> returns from <code class="language-plaintext highlighter-rouge">ioctl</code> to <code class="language-plaintext highlighter-rouge">vm_run</code> in <code class="language-plaintext highlighter-rouge">libvmmapi</code> after a VMEXIT occurs due to the guest VM performing an I/O access. <code class="language-plaintext highlighter-rouge">vm_run</code> then returns to <code class="language-plaintext highlighter-rouge">vm_loop</code>, which invokes the necessary handler based on the exit code. In this case, the handler <code class="language-plaintext highlighter-rouge">vmexit_inout</code> will be invoked, which we show below.</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">int</span>
+<span class="nf">vmexit_inout</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="k">struct</span> <span class="n">vm_exit</span> <span class="o">*</span><span class="n">vme</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">pvcpu</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">error</span><span class="p">;</span>
+  <span class="kt">int</span> <span class="n">bytes</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">in</span><span class="p">,</span> <span class="n">out</span><span class="p">;</span>
+  <span class="kt">uint32_t</span> <span class="n">eax</span><span class="p">;</span>
+  <span class="kt">int</span> <span class="n">vcpu</span><span class="p">;</span>
+  <span class="n">vcpu</span> <span class="o">=</span> <span class="o">*</span><span class="n">pvcpu</span><span class="p">;</span>
+
+  <span class="cm">/* (1) */</span>
+  <span class="n">port</span> <span class="o">=</span> <span class="n">vme</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">port</span><span class="p">;</span> 
+  <span class="n">bytes</span> <span class="o">=</span> <span class="n">vme</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">bytes</span><span class="p">;</span>
+  <span class="n">eax</span> <span class="o">=</span> <span class="n">vme</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">eax</span><span class="p">;</span>
+  <span class="n">in</span> <span class="o">=</span> <span class="n">vme</span><span class="o">-&gt;</span><span class="n">u</span><span class="p">.</span><span class="n">inout</span><span class="p">.</span><span class="n">in</span><span class="p">;</span>
+  <span class="n">out</span> <span class="o">=</span> <span class="o">!</span><span class="n">in</span><span class="p">;</span>
+
+  <span class="n">error</span> <span class="o">=</span> <span class="n">emulate_inout</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">in</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">bytes</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">eax</span><span class="p">,</span> <span class="n">strictio</span><span class="p">);</span>  <span class="c1">// (2)</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">error</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">in</span><span class="p">)</span> 
+    <span class="n">error</span> <span class="o">=</span> <span class="n">vm_set_register</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">VM_REG_GUEST_RAX</span><span class="p">,</span> <span class="n">eax</span><span class="p">);</span>  <span class="c1">// (3)</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">error</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">VMEXIT_CONTINUE</span><span class="p">);</span>  <span class="c1">// (4)</span>
+  <span class="k">else</span> <span class="p">{</span>
+    <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"Unhandled %s%c 0x%04x</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span>
+    <span class="n">in</span> <span class="o">?</span> <span class="s">"in"</span> <span class="o">:</span> <span class="s">"out"</span><span class="p">,</span>
+    <span class="n">bytes</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">?</span> <span class="sc">'b'</span> <span class="o">:</span> <span class="p">(</span><span class="n">bytes</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">?</span> <span class="sc">'w'</span> <span class="o">:</span> <span class="sc">'l'</span><span class="p">),</span> <span class="n">port</span><span class="p">);</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">vmexit_catch_inout</span><span class="p">());</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (1), we get the necessary information for the I/O access. In (2), we call <code class="language-plaintext highlighter-rouge">emulate_inout</code>, which performs I/O emulation. If the guest VM performs an in operation, we return the results by setting the guest %RAX register. In (4), we return <code class="language-plaintext highlighter-rouge">VMEXIT_CONTINUE</code> to <code class="language-plaintext highlighter-rouge">vm_loop</code>, which will resume execution at the next guest instruction. We now look at the function <code class="language-plaintext highlighter-rouge">emulate_inout</code>:</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span>
+<span class="nf">emulate_inout</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="kt">int</span> <span class="n">in</span><span class="p">,</span> <span class="kt">int</span> <span class="n">port</span><span class="p">,</span> <span class="kt">int</span> <span class="n">bytes</span><span class="p">,</span>
+              <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">eax</span><span class="p">,</span> <span class="kt">int</span> <span class="n">strict</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">flags</span><span class="p">;</span>
+  <span class="kt">uint32_t</span> <span class="n">mask</span><span class="p">;</span>
+  <span class="n">inout_func_t</span> <span class="n">handler</span><span class="p">;</span>
+  <span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">;</span>
+  <span class="n">assert</span><span class="p">(</span><span class="n">port</span> <span class="o">&lt;</span> <span class="n">MAX_IOPORTS</span><span class="p">);</span>
+  <span class="n">handler</span> <span class="o">=</span> <span class="n">inout_handlers</span><span class="p">[</span><span class="n">port</span><span class="p">].</span><span class="n">handler</span><span class="p">;</span>  <span class="c1">// (5)</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">strict</span> <span class="o">&amp;&amp;</span> <span class="n">handler</span> <span class="o">==</span> <span class="n">default_inout</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+  <span class="cm">/* (6) */</span>
+  <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">in</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span> <span class="p">(</span><span class="n">bytes</span><span class="p">)</span> <span class="p">{</span>
+      <span class="k">case</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="mh">0xff</span><span class="p">;</span>
+        <span class="k">break</span><span class="p">;</span>
+      <span class="k">case</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="mh">0xffff</span><span class="p">;</span>
+        <span class="k">break</span><span class="p">;</span>
+      <span class="nl">default:</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="mh">0xffffffff</span><span class="p">;</span>
+        <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="o">*</span><span class="n">eax</span> <span class="o">=</span> <span class="o">*</span><span class="n">eax</span> <span class="o">&amp;</span> <span class="n">mask</span><span class="p">;</span>  <span class="c1">// (7)</span>
+  <span class="p">}</span>
+  <span class="n">flags</span> <span class="o">=</span> <span class="n">inout_handlers</span><span class="p">[</span><span class="n">port</span><span class="p">].</span><span class="n">flags</span><span class="p">;</span>
+  <span class="n">arg</span> <span class="o">=</span> <span class="n">inout_handlers</span><span class="p">[</span><span class="n">port</span><span class="p">].</span><span class="n">arg</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">in</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">IOPORT_F_IN</span><span class="p">))</span> <span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">in</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">IOPORT_F_OUT</span><span class="p">)))</span>
+    <span class="k">return</span> <span class="p">((</span><span class="o">*</span><span class="n">handler</span><span class="p">)(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">vcpu</span><span class="p">,</span> <span class="n">in</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">bytes</span><span class="p">,</span> <span class="n">eax</span><span class="p">,</span> <span class="n">arg</span><span class="p">));</span>  <span class="c1">// (8)</span>
+  <span class="k">else</span>
+    <span class="k">return</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span>
+<span class="nf">register_inout</span><span class="p">(</span><span class="k">struct</span> <span class="n">inout_port</span> <span class="o">*</span><span class="n">iop</span><span class="p">)</span>  <span class="c1">// (9)</span>
+<span class="p">{</span>
+  <span class="n">assert</span><span class="p">(</span><span class="n">iop</span><span class="o">-&gt;</span><span class="n">port</span> <span class="o">&lt;</span> <span class="n">MAX_IOPORTS</span><span class="p">);</span>
+  <span class="n">inout_handlers</span><span class="p">[</span><span class="n">iop</span><span class="o">-&gt;</span><span class="n">port</span><span class="p">].</span><span class="n">name</span> <span class="o">=</span> <span class="n">iop</span><span class="o">-&gt;</span><span class="n">name</span><span class="p">;</span>
+  <span class="n">inout_handlers</span><span class="p">[</span><span class="n">iop</span><span class="o">-&gt;</span><span class="n">port</span><span class="p">].</span><span class="n">flags</span> <span class="o">=</span> <span class="n">iop</span><span class="o">-&gt;</span><span class="n">flags</span><span class="p">;</span>
+  <span class="n">inout_handlers</span><span class="p">[</span><span class="n">iop</span><span class="o">-&gt;</span><span class="n">port</span><span class="p">].</span><span class="n">handler</span> <span class="o">=</span> <span class="n">iop</span><span class="o">-&gt;</span><span class="n">handler</span><span class="p">;</span>
+  <span class="n">inout_handlers</span><span class="p">[</span><span class="n">iop</span><span class="o">-&gt;</span><span class="n">port</span><span class="p">].</span><span class="n">arg</span> <span class="o">=</span> <span class="n">iop</span><span class="o">-&gt;</span><span class="n">arg</span><span class="p">;</span>
+  <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>In (5), we get the registered I/O handler. For guest writes, we set the mask based on length of I/O access in (6) and apply the mask to the value the guest wants to write in (7). In (8), we invoke the handler. We can register an I/O emulation handler using the <code class="language-plaintext highlighter-rouge">register_inout</code> function in (9).</p> <p>We now show examples of device emulation. Our primary focus is on para-virtualized device emulation, which are used due to their high-performance (compared to full-virtualization), but require installing para-virtualized device drivers to the guest OS. Note that more recent developments such as <a href="https://www.dpdk.org/" rel="external nofollow noopener" target="_blank">DPDK</a> and <a href="https://spdk.io/" rel="external nofollow noopener" target="_blank">SPDK</a> bypass the kernel entirely by performing polling in userspace; this prevents each I/O access from going through 2 stacks: the guest VM and the VMM.</p> <h2 id="consport">Consport</h2> <p>We end with a simple example of I/O emulation: emulating a paravirtualized console port. This post is getting too long, so I will continue explaining other examples of device emulation (with the main focus being virtio) in the next post in the series!</p> <div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">void</span>
+<span class="nf">ttywrite</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">wb</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="n">write</span><span class="p">(</span><span class="n">STDOUT_FILENO</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">wb</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>  <span class="c1">// (4) </span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="kt">int</span>
+<span class="nf">console_handler</span><span class="p">(</span><span class="k">struct</span> <span class="n">vmctx</span> <span class="o">*</span><span class="n">ctx</span><span class="p">,</span> <span class="kt">int</span> <span class="n">vcpu</span><span class="p">,</span> <span class="kt">int</span> <span class="n">in</span><span class="p">,</span> <span class="kt">int</span> <span class="n">port</span><span class="p">,</span> <span class="kt">int</span> <span class="n">bytes</span><span class="p">,</span>
+                <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">eax</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="k">static</span> <span class="kt">int</span> <span class="n">opened</span><span class="p">;</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">bytes</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="n">in</span><span class="p">)</span> <span class="p">{</span>
+    <span class="o">*</span><span class="n">eax</span> <span class="o">=</span> <span class="n">BVM_CONS_SIG</span><span class="p">;</span>
+    <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+  <span class="p">}</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="n">bytes</span> <span class="o">!=</span> <span class="mi">4</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">opened</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">ttyopen</span><span class="p">();</span>  <span class="c1">// (1)</span>
+    <span class="n">opened</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+  <span class="p">}</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="n">in</span><span class="p">)</span> 
+    <span class="o">*</span><span class="n">eax</span> <span class="o">=</span> <span class="n">ttyread</span><span class="p">();</span>  <span class="c1">// (2)</span>
+  <span class="k">else</span>
+    <span class="n">ttywrite</span><span class="p">(</span><span class="o">*</span><span class="n">eax</span><span class="p">);</span>  <span class="c1">// (3)</span>
+  <span class="k">return</span> <span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="k">struct</span> <span class="n">inout_port</span> <span class="n">consport</span> <span class="o">=</span> <span class="p">{</span>
+  <span class="s">"bvmcons"</span><span class="p">,</span>
+  <span class="n">BVM_CONSOLE_PORT</span><span class="p">,</span>
+  <span class="n">IOPORT_F_INOUT</span><span class="p">,</span>
+  <span class="n">console_handler</span>
+<span class="p">};</span>
+
+<span class="kt">void</span>
+<span class="nf">init_bvmcons</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">register_inout</span><span class="p">(</span><span class="o">&amp;</span><span class="n">consport</span><span class="p">);</span>  <span class="c1">// (5)</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>If the console is not open yet, (1) opens it. If the guest attempts to perform a read, <code class="language-plaintext highlighter-rouge">console_handler</code> calls <code class="language-plaintext highlighter-rouge">ttyread()</code> in (2), otherwise it calls <code class="language-plaintext highlighter-rouge">ttywrite()</code> in (3). <code class="language-plaintext highlighter-rouge">ttywrite()</code> simply performs a write to STDOUT in (4). This device emulator is registered using <code class="language-plaintext highlighter-rouge">register_inout</code> in (5).</p> <h1 id="summary">Summary</h1> <p>In the <a href="">next post</a>, I will continue explaining device emulation in userspace, this time focusing on virtio, which is a common framework for paravirtualized device I/O. Examples of virtio include virtio-net for NICs and virtio-blk for storage devices. I will also dive into the code to understand how <code class="language-plaintext highlighter-rouge">usr/sbin/bhyveload</code> loads and initializes guest VMs into memory.</p> <h1 id="references">References</h1> <p>[1] <a href="https://syuu1228.github.io/howto_implement_hypervisor/" rel="external nofollow noopener" target="_blank">https://syuu1228.github.io/howto_implement_hypervisor/</a> <br> [2] <a href="https://wiki.freebsd.org/bhyve" rel="external nofollow noopener" target="_blank">https://wiki.freebsd.org/bhyve</a></p> </div> </article> <br> <hr> <br> <ul class="list-disc pl-8"></ul> <h2 class="text-3xl font-semibold mb-4 mt-12">Enjoy Reading This Article?</h2> <p class="mb-2">Here are some more articles you might like to read next:</p> <li class="my-2"> <a class="text-pink-700 underline font-semibold hover:text-pink-800" href="/blog/2025/vtx-hardware/">Writing a Hypervisor from Scratch - Hardware</a> </li> </div> </div> </div> </div> <footer class="fixed-bottom" role="contentinfo"> <div class="container mt-0"> © Copyright 2025 Stephen Chien. Powered by <a href="https://jekyllrb.com/" target="_blank" rel="external nofollow noopener">Jekyll</a> with <a href="https://github.com/alshedivat/al-folio" rel="external nofollow noopener" target="_blank">al-folio</a> theme. Hosted by <a href="https://pages.github.com/" target="_blank" rel="external nofollow noopener">GitHub Pages</a>. Photos from <a href="https://unsplash.com" target="_blank" rel="external nofollow noopener">Unsplash</a>. </div> </footer> <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script> <script src="/assets/js/bootstrap.bundle.min.js"></script> <script src="https://cdn.jsdelivr.net/npm/mdbootstrap@4.20.0/js/mdb.min.js" integrity="sha256-NdbiivsvWt7VYCt6hYNT3h/th9vSTL4EDWeGs5SN3DA=" crossorigin="anonymous"></script> <script defer src="https://cdn.jsdelivr.net/npm/masonry-layout@4.2.2/dist/masonry.pkgd.min.js" integrity="sha256-Nn1q/fx0H7SNLZMQ5Hw5JLaTRZp0yILA/FRexe19VdI=" crossorigin="anonymous"></script> <script defer src="https://cdn.jsdelivr.net/npm/imagesloaded@5.0.0/imagesloaded.pkgd.min.js" integrity="sha256-htrLFfZJ6v5udOG+3kNLINIKh2gvoKqwEhHYfTTMICc=" crossorigin="anonymous"></script> <script defer src="/assets/js/masonry.js?a0db7e5d5c70cc3252b3138b0c91dcaf" type="text/javascript"></script> <script defer src="https://cdn.jsdelivr.net/npm/medium-zoom@1.1.0/dist/medium-zoom.min.js" integrity="sha256-ZgMyDAIYDYGxbcpJcfUnYwNevG/xi9OHKaR/8GK+jWc=" crossorigin="anonymous"></script> <script defer src="/assets/js/zoom.js?85ddb88934d28b74e78031fd54cf8308"></script> <script defer src="/assets/js/bootstrap-toc.min.js?c82ff4de8b0955d6ff14f5b05eed7eb6"></script> <script src="/assets/js/no_defer.js?2781658a0a2b13ed609542042a859126"></script> <script defer src="/assets/js/common.js?e0514a05c5c95ac1a93a8dfd5249b92e"></script> <script defer src="/assets/js/copy_code.js?c8a01c11a92744d44b093fc3bda915df" type="text/javascript"></script> <script defer src="/assets/js/jupyter_new_tab.js?d9f17b6adc2311cbabd747f4538bb15f"></script> <script async src="https://d1bxh8uas1mnw7.cloudfront.net/assets/embed.js"></script> <script async src="https://badge.dimensions.ai/badge.js"></script> <script defer type="text/javascript" id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js" integrity="sha256-MASABpB4tYktI2Oitl4t+78w/lyA+D7b/s9GEP0JOGI=" crossorigin="anonymous"></script> <script src="/assets/js/mathjax-setup.js?a5bb4e6a542c546dd929b24b8b236dfd"></script> <script defer src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6" crossorigin="anonymous"></script> <script defer src="/assets/js/progress-bar.js?2f30e0e6801ea8f5036fa66e1ab0a71a" type="text/javascript"></script> <script src="/assets/js/vanilla-back-to-top.min.js?f40d453793ff4f64e238e420181a1d17"></script> <script>
+    addBackToTop();
+  </script> <script type="module" src="/assets/js/search/ninja-keys.min.js?a3446f084dcaecc5f75aa1757d087dcf"></script> <ninja-keys hidebreadcrumbs noautoloadmdicons placeholder="Type to start searching"></ninja-keys> <script src="/assets/js/search-setup.js?6c304f7b1992d4b60f7a07956e52f04a"></script> <script src="/assets/js/search-data.js"></script> <script src="/assets/js/shortcut-key.js?6f508d74becd347268a7f822bca7309d"></script> </body> </html>
