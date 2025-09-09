@@ -2,22 +2,22 @@
 layout: about
 title: about
 permalink: /
-subtitle: <a href='#'>Affiliations</a>. Address. Contacts. Motto. Etc.
+subtitle: 
 
-profile:
-  align: right
-  image: prof_pic.jpg
-  image_circular: false # crops the image to make it circular
-  more_info: >
-    <p>555 your office number</p>
-    <p>123 your address street</p>
-    <p>Your City, State 12345</p>
+# profile:
+#   align: right
+#   image: prof_pic.jpg
+#   image_circular: false # crops the image to make it circular
+#   more_info: >
+#     <p>555 your office number</p>
+#     <p>123 your address street</p>
+#     <p>Your City, State 12345</p>
 
-selected_papers: true # includes a list of papers marked as "selected={true}"
+selected_papers: false # includes a list of papers marked as "selected={true}"
 social: true # includes social icons at the bottom of the page
 
 announcements:
-  enabled: true # includes a list of news items
+  enabled: false # includes a list of news items
   scrollable: true # adds a vertical scroll bar if there are more than 3 news items
   limit: 5 # leave blank to include all the news in the `_news` folder
 
@@ -27,8 +27,25 @@ latest_posts:
   limit: 3 # leave blank to include all the blog posts
 ---
 
-Write your biography here. Tell the world about yourself. Link to your favorite [subreddit](http://reddit.com). You can put a picture in, too. The code is already in, just name your picture `prof_pic.jpg` and put it in the `img/` folder.
+Hello! I am Stephen Chien, a senior at [Carnegie Mellon University](https://www.cmu.edu/) 
+pursuing a double major in Electrical & Computer Engineering + Computer Science, with a 
+minor in Mathematical Sciences.
 
-Put your address / P.O. box / other info right below your picture. You can also disable any of these elements by editing `profile` property of the YAML header of your `_pages/about.md`. Edit `_bibliography/papers.bib` and Jekyll will render your [publications page](/al-folio/publications/) automatically.
+My academic interests are in software systems, especially operating systems,
+computer networking, computer architecture, distributed systems, and database systems.
 
-Link to your social media connections, too. This theme is set up to use [Font Awesome icons](https://fontawesome.com/) and [Academicons](https://jpswalsh.github.io/academicons/), like the ones below. Add your Facebook, Twitter, LinkedIn, Google Scholar, or just disable all of them.
+I am currently measuring and fingerprinting [QUIC](https://en.wikipedia.org/wiki/QUIC) 
+congestion control algorithms with Professor [Theophilus Benson](https://www.andrew.cmu.edu/user/theophib/) 
+at CMU, and developing para-passthrough hypervisors for IOMMU protection as part of 
+[ShinagawaLab](https://www.os.is.s.u-tokyo.ac.jp/en/) at [The University of Tokyo](https://www.u-tokyo.ac.jp/ja/index.html). I am a current TA for 15-440/640 Distributed Systems at CMU.
+
+I previously interned at [Sony PlayStation](https://www.playstation.com/en-us/) 
+as a software engineer. I have done research on detecting and localizing traffic 
+differentiation by routers with Professor [Katerina Argyraki](https://people.epfl.ch/katerina.argyraki?lang=en) at [EPFL](https://www.epfl.ch/en/) Network Architecture Lab. 
+
+In my free time, I enjoy playing the piano, reading, hiking, and playing
+badminton/tennis with friends. On extended vacations I like travelling and 
+going on roadtrips. I grew up in my hometown of Tokyo, Japan before moving 
+to the US for college.
+
+Feel free to reach out to me at [shchien@andrew.cmu.edu](mailto:shchien@andrew.cmu.edu).
