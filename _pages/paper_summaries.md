@@ -23,6 +23,12 @@ up key concepts from papers in an easily-digestible format.
 
 ## 2025
 
+- (9/15/2025) DBOS: A DBMS-oriented Operating System
+- (9/14/2025) Ray: A Distributed Framework for Emerging AI Applications
+- (9/14/2025) MapReduce: Simplified Data Processing on Large Clusters
+- (9/13/2025) Disk failures in the real world: What does an MTTF of 1,000,000 hours mean to you?
+- (9/13/2025) A Case for Redundant Arrays of Inexpensive Disks (RAID)
+- (9/13/2025) The Design and Implementation of a Log-Structured File System
 - (9/8/2025) Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency
 - (9/8/2025) Scale and Performance in a Distributed File System
 - (9/7/2025) IronFleet: Proving Practical Distributed Systems Correct
